@@ -6,6 +6,7 @@ const { createReadStream } = require('fs');
 const config = require('./config.js');
 const zip_folder_lib = require('zip-folder');
 var cron = require('node-cron');
+const { PromiseResult } = require('aws-sdk/lib/request');
 
 /**
  * 
@@ -121,6 +122,38 @@ function postgres_dump(filename) {
 
 /**
  * 
+ * @param {string} prefix 
+ * @returns {Promise<PromiseResult<aws_sdk.S3.ListObjectsOutput, aws_sdk.AWSError>>}
+ */
+ function listFilesS3(
+    prefix
+) {
+    const s3 = new aws_sdk.S3({ apiVersion: config.s3.apiVersion });
+    return s3
+        .listObjects({
+            Bucket: config.s3.bucket,
+            Prefix: prefix,
+        })
+        .promise();
+}
+
+/**
+ * 
+ * @param {string} key 
+ * @returns {Promise<PromiseResult<aws_sdk.S3.DeleteObjectOutput, aws_sdk.AWSError>>}
+ */
+function deleteFileS3(
+    key
+) {
+    const s3 = new aws_sdk.S3({ apiVersion: environment.aws.apiVersion });
+    return s3
+        .deleteObject({ Bucket: environment.aws.bucket, Key: key })
+        .promise();
+}
+
+
+/**
+ * 
  * @returns {Promise<string>}
  */
 async function main() {
@@ -152,12 +185,35 @@ async function main() {
     await rimraf([fileName + '.zip']);
     console.log('-------- clear done --------');
 
+    console.log('-------- start clear old backup --------');
+    const list = await listFilesS3('Backup/postgres');
+
+    if (Array.isArray(list)) {
+      if (list.length > 5) {
+        const sort = list.sort((a, b) => {
+          const aDate = new Date(a?.LastModified ?? '');
+          const bDate = new Date(b?.LastModified ?? '');
+          if (aDate > bDate) {
+            return 1;
+          } else {
+            return -1;
+          }
+        });
+
+        if (sort[0]?.Key) {
+          await deleteFileS3(sort[0]?.Key);
+        }
+      }
+    }
+
+    console.log('-------- clear old backup done --------');
+
     return 'done';
 }
 
-main()
-    .then(() => console.log('-------- done --------'))
-    .catch((err) => console.log(err));
-// cron.schedule('0 0 0 * * *', () => {
-// });
+cron.schedule('0 0 0 * * *', () => {
+    main()
+        .then(() => console.log('-------- done --------'))
+        .catch((err) => console.log(err));
+});
 
